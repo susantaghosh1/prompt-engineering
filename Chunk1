@@ -1,0 +1,90 @@
+import re
+from typing import List, Dict, Any
+
+def chunk_markdown(markdown_text: str) -> List[Dict[Any, Any]]:
+    """
+    Chunks markdown text based on headers while maintaining hierarchy and page information.
+    
+    Args:
+        markdown_text (str): Markdown text with pages separated by triple dash
+    
+    Returns:
+        List[Dict]: List of chunks containing:
+            - content: The text content
+            - headers: List of associated headers in hierarchy
+            - pages: List of page numbers this chunk appears in
+    """
+    # Split into pages
+    pages = markdown_text.split('---')
+    
+    # Regular expressions for headers
+    header_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+    
+    chunks = []
+    current_headers = []
+    current_content = []
+    current_pages = set()
+    
+    for page_num, page in enumerate(pages, 1):
+        lines = page.strip().split('\n')
+        
+        for line in lines:
+            header_match = header_pattern.match(line)
+            
+            if header_match:
+                # If we have accumulated content, save the previous chunk
+                if current_content:
+                    chunks.append({
+                        'content': '\n'.join(current_content).strip(),
+                        'headers': current_headers.copy(),
+                        'pages': sorted(list(current_pages))
+                    })
+                    current_content = []
+                    current_pages = set()
+                
+                # Update headers based on level
+                level = len(header_match.group(1))
+                header_text = header_match.group(2)
+                
+                # Trim headers to current level
+                current_headers = current_headers[:level-1]
+                current_headers.append(header_text)
+                
+                # Start new chunk with the header
+                current_content.append(line)
+                current_pages.add(page_num)
+            else:
+                if line.strip():  # Only add non-empty lines
+                    current_content.append(line)
+                    current_pages.add(page_num)
+    
+    # Add the last chunk
+    if current_content:
+        chunks.append({
+            'content': '\n'.join(current_content).strip(),
+            'headers': current_headers.copy(),
+            'pages': sorted(list(current_pages))
+        })
+    
+    return chunks
+
+# Example usage:
+def example_usage():
+    markdown_text = """# Main Header
+This is some content under the main header.
+## Sub Header 1
+Content under sub header 1.
+---
+Still content from sub header 1 but on page 2.
+### Sub Sub Header
+Deep nested content.
+## Sub Header 2
+Final content."""
+
+    chunks = chunk_markdown(markdown_text)
+    for chunk in chunks:
+        print("\nChunk:")
+        print("Headers:", " > ".join(chunk['headers']))
+        print("Pages:", chunk['pages'])
+        print("Content:", chunk['content'])
+        print("-" * 50)
