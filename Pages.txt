@@ -1,0 +1,22 @@
+import re
+
+def chunk_markdown(markdown_content):
+    # ... (rest of the function code is the same as before)
+
+            elif chunks:  # If a chunk is already started, add content to it
+                if current_page not in chunks[-1]["page_numbers"]: # Check page number *first*
+                    chunks[-1]["page_numbers"].append(current_page)
+                chunks[-1]["content"] += line + "\n" # *Then* add content
+                
+            elif not chunks and line.strip(): # handle the content before the first header
+                chunks.append({
+                    "content": line + "\n",
+                    "headers": [],
+                    "page_numbers": [current_page]
+                })
+
+        current_page += 1
+
+    return chunks
+
+# ... (example usage remains the same)
