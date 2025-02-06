@@ -1,0 +1,60 @@
+def chunk_number_with_overlap(num: int) -> list[tuple[int, int]]:
+    """
+    Split a number into overlapping chunks.
+    Each chunk has a minimum size of 8 numbers with 1 number overlap.
+    
+    Args:
+        num (int): The number to split into chunks
+        
+    Returns:
+        list[tuple[int, int]]: List of tuples containing (start, end) ranges
+        
+    Example:
+        12 -> [(1, 9), (9, 12)]
+        16 -> [(1, 9), (9, 16)]
+    """
+    if num <= 8:
+        return [(1, num + 1)]
+    
+    chunks = [(1, 9)]  # First chunk is always 1-9
+    current_start = 9  # Start with overlap at 9
+    
+    while current_start < num:
+        # Calculate remaining numbers
+        remaining = num - current_start + 1
+        
+        # If remaining numbers are less than 8, extend the previous chunk
+        if remaining < 8:
+            chunks[-1] = (chunks[-1][0], num + 1)
+            break
+            
+        # Otherwise, create a new chunk
+        chunks.append((current_start, num + 1))
+        break
+    
+    return chunks
+
+# Test cases
+def test_chunking():
+    test_numbers = [12, 16, 20, 25]
+    
+    print("Testing number chunking:")
+    for num in test_numbers:
+        chunks = chunk_number_with_overlap(num)
+        print(f"Number {num} -> {chunks}")
+        
+        # Verify overlap
+        if len(chunks) > 1:
+            for i in range(len(chunks) - 1):
+                current_chunk = chunks[i]
+                next_chunk = chunks[i + 1]
+                overlap = set(range(current_chunk[0], current_chunk[1])) & set(range(next_chunk[0], next_chunk[1]))
+                print(f"Overlap between chunk {i} and {i+1}: {sorted(overlap)}")
+
+if __name__ == "__main__":
+    test_chunking()
+    
+    # Additional specific examples
+    print("\nSpecific examples:")
+    print("12 ->", chunk_number_with_overlap(12))
+    print("16 ->", chunk_number_with_overlap(16))
