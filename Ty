@@ -1,0 +1,59 @@
+def chunk_number_with_overlap(num: int) -> list[tuple[int, int]]:
+    """
+    Split a number into overlapping chunks.
+    Each chunk has a size of approximately 9 numbers with 2 number overlap.
+    
+    Args:
+        num (int): The number to split into chunks
+        
+    Returns:
+        list[tuple[int, int]]: List of tuples containing (start, end) ranges
+        
+    Example:
+        12 -> [(1, 9), (8, 13)]
+        16 -> [(1, 9), (8, 16), (15, 17)]
+    """
+    if num <= 9:
+        return [(1, num + 1)]
+    
+    chunks = [(1, 9)]  # First chunk always starts with 1-9
+    
+    # If number is greater than 9, create additional chunks
+    current_start = 8  # Start with overlap of 8
+    while current_start < num:
+        chunk_end = min(current_start + 8, num + 1)  # +1 to include the number itself
+        
+        # If this would be the last chunk and it's too small, merge with previous
+        if chunk_end == num + 1 and chunk_end - current_start <= 2:
+            chunks[-1] = (chunks[-1][0], chunk_end)
+            break
+            
+        chunks.append((current_start, chunk_end))
+        current_start = chunk_end - 2  # Create 2-number overlap
+    
+    return chunks
+
+# Test cases
+def test_chunking():
+    test_numbers = [5, 12, 16, 20, 25]
+    
+    print("Testing number chunking:")
+    for num in test_numbers:
+        chunks = chunk_number_with_overlap(num)
+        print(f"\nNumber {num} -> {chunks}")
+        
+        # Verify continuity and overlap
+        for i in range(len(chunks) - 1):
+            current_chunk = chunks[i]
+            next_chunk = chunks[i + 1]
+            overlap = set(range(current_chunk[0], current_chunk[1])) & set(range(next_chunk[0], next_chunk[1]))
+            print(f"Overlap between chunk {i} and {i+1}: {sorted(overlap)}")
+
+# Run tests
+if __name__ == "__main__":
+    test_chunking()
+    
+    # Additional specific examples
+    print("\nSpecific examples:")
+    print("12 ->", chunk_number_with_overlap(12))
+    print("16 ->", chunk_number_with_overlap(16))
