@@ -1,0 +1,123 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+from sklearn.datasets import make_blobs
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# Generate a synthetic dataset with some outliers
+def create_dataset():
+    # Generate main clusters
+    X_main, _ = make_blobs(n_samples=300, centers=2, random_state=42)
+    
+    # Generate outliers
+    outliers = np.random.uniform(low=-10, high=10, size=(15, 2))
+    
+    # Combine main data and outliers
+    X = np.vstack([X_main, outliers])
+    
+    # Create true labels (0 for inliers, 1 for outliers)
+    y_true = np.zeros(X.shape[0])
+    y_true[-15:] = 1  # Last 15 points are outliers
+    
+    return X, y_true
+
+# Create dataset
+X, y_true = create_dataset()
+
+# Convert to DataFrame for easier handling
+df = pd.DataFrame(X, columns=['feature1', 'feature2'])
+df['true_label'] = y_true
+
+# Standardize features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Train Isolation Forest model
+# contamination: expected proportion of outliers in the dataset
+# n_estimators: number of base estimators (trees)
+# random_state: for reproducibility
+model = IsolationForest(
+    n_estimators=100,
+    contamination=0.05,  # Expect 5% of the data to be outliers
+    random_state=42
+)
+
+# Fit the model
+model.fit(X_scaled)
+
+# Predict anomalies
+# The model returns: 1 for inliers, -1 for outliers
+# We'll convert this to: 0 for inliers, 1 for outliers to match our true labels
+y_pred = model.predict(X_scaled)
+y_pred = np.where(y_pred == -1, 1, 0)  # Convert -1 to 1 (outlier) and 1 to 0 (inlier)
+
+# Add predictions to dataframe
+df['predicted_label'] = y_pred
+
+# Calculate metrics
+accuracy = np.mean(y_true == y_pred)
+true_outliers = np.sum(y_true == 1)
+detected_outliers = np.sum(y_pred == 1)
+correctly_detected = np.sum((y_true == 1) & (y_pred == 1))
+
+# Visualize results
+plt.figure(figsize=(12, 5))
+
+# Plot 1: Original Data with True Labels
+plt.subplot(1, 2, 1)
+plt.scatter(df[df['true_label'] == 0]['feature1'], 
+            df[df['true_label'] == 0]['feature2'], 
+            c='blue', label='True Inliers')
+plt.scatter(df[df['true_label'] == 1]['feature1'], 
+            df[df['true_label'] == 1]['feature2'], 
+            c='red', marker='x', s=100, label='True Outliers')
+plt.title('True Outliers')
+plt.legend()
+
+# Plot 2: Predictions
+plt.subplot(1, 2, 2)
+plt.scatter(df[df['predicted_label'] == 0]['feature1'], 
+            df[df['predicted_label'] == 0]['feature2'], 
+            c='blue', label='Predicted Inliers')
+plt.scatter(df[df['predicted_label'] == 1]['feature1'], 
+            df[df['predicted_label'] == 1]['feature2'], 
+            c='red', marker='x', s=100, label='Predicted Outliers')
+plt.title('Isolation Forest Predictions')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Print Results
+print(f"Model Performance:")
+print(f"Accuracy: {accuracy:.2f}")
+print(f"True outliers: {true_outliers}")
+print(f"Detected outliers: {detected_outliers}")
+print(f"Correctly detected outliers: {correctly_detected}")
+print(f"Detection rate: {correctly_detected/true_outliers:.2f}")
+
+# Save the model (optional)
+# import joblib
+# joblib.dump(model, 'isolation_forest_model.pkl')
+
+# Example: Predict on new data
+print("\nPredicting on new samples:")
+new_samples = np.array([
+    [0, 0],      # Likely inlier - close to cluster
+    [9, 9]       # Likely outlier - far from clusters
+])
+
+# Scale the new data
+new_samples_scaled = scaler.transform(new_samples)
+
+# Predict on new samples
+new_predictions = model.predict(new_samples_scaled)
+new_predictions = np.where(new_predictions == -1, 1, 0)  # Convert -1 to 1 (outlier) and 1 to 0 (inlier)
+
+for i, (sample, pred) in enumerate(zip(new_samples, new_predictions)):
+    status = "Outlier" if pred == 1 else "Normal"
+    print(f"Sample {i+1} {sample}: {status}")
