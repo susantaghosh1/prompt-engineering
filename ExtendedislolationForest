@@ -1,0 +1,327 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_blobs
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+import pandas as pd
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, f1_score
+
+# Implementation of Extended Isolation Forest
+# Based on the paper: https://doi.org/10.1109/TKDE.2019.2947676
+
+class ExtendedIsolationTree:
+    def __init__(self, max_depth=None, random_state=None):
+        self.max_depth = max_depth
+        self.random_state = random_state
+        self.rng = np.random.RandomState(random_state)
+        self.root = None
+        
+    def fit(self, X, current_depth=0):
+        n_samples, n_features = X.shape
+        
+        # Stopping criteria
+        if current_depth >= self.max_depth or n_samples <= 1:
+            self.root = {"type": "leaf", "size": n_samples}
+            return self
+        
+        # Select a random normal vector for the hyperplane
+        normal_vector = self.rng.normal(size=n_features)
+        normal_vector = normal_vector / np.linalg.norm(normal_vector)
+        
+        # Project the data onto the normal vector
+        projections = X @ normal_vector
+        
+        # Choose a random split point between min and max projection
+        min_proj, max_proj = np.min(projections), np.max(projections)
+        if min_proj == max_proj:
+            self.root = {"type": "leaf", "size": n_samples}
+            return self
+            
+        split_point = self.rng.uniform(min_proj, max_proj)
+        
+        # Split data
+        left_indices = projections <= split_point
+        right_indices = ~left_indices
+        
+        # Create node
+        self.root = {
+            "type": "node",
+            "normal_vector": normal_vector,
+            "split_point": split_point,
+            "left": None,
+            "right": None
+        }
+        
+        # Recursively build the tree
+        if np.any(left_indices):
+            left_tree = ExtendedIsolationTree(max_depth=self.max_depth, random_state=self.rng.randint(0, 1000000))
+            self.root["left"] = left_tree.fit(X[left_indices], current_depth + 1).root
+            
+        if np.any(right_indices):
+            right_tree = ExtendedIsolationTree(max_depth=self.max_depth, random_state=self.rng.randint(0, 1000000))
+            self.root["right"] = right_tree.fit(X[right_indices], current_depth + 1).root
+            
+        return self
+    
+    def _path_length(self, x, node, current_depth=0):
+        if node["type"] == "leaf":
+            return current_depth
+        
+        proj = np.dot(x, node["normal_vector"])
+        
+        if proj <= node["split_point"]:
+            if node["left"] is None:
+                return current_depth + 1
+            else:
+                return self._path_length(x, node["left"], current_depth + 1)
+        else:
+            if node["right"] is None:
+                return current_depth + 1
+            else:
+                return self._path_length(x, node["right"], current_depth + 1)
+    
+    def path_length(self, x):
+        return self._path_length(x, self.root)
+
+class ExtendedIsolationForest:
+    def __init__(self, n_estimators=100, max_samples=256, max_features='auto', 
+                 contamination=0.1, random_state=None, verbose=False):
+        self.n_estimators = n_estimators
+        self.max_samples = max_samples
+        self.max_features = max_features
+        self.contamination = contamination
+        self.random_state = random_state
+        self.trees = []
+        self.verbose = verbose
+        
+    def _sample_features(self, n_features):
+        if self.max_features == 'auto' or self.max_features is None:
+            return n_features
+        elif isinstance(self.max_features, int):
+            return min(self.max_features, n_features)
+        elif isinstance(self.max_features, float):
+            return max(1, int(self.max_features * n_features))
+        
+    def fit(self, X):
+        n_samples, n_features = X.shape
+        
+        max_samples = min(self.max_samples, n_samples)
+        max_depth = int(np.ceil(np.log2(max_samples)))
+        
+        rng = np.random.RandomState(self.random_state)
+        
+        # Build trees
+        for i in range(self.n_estimators):
+            if self.verbose and (i + 1) % 10 == 0:
+                print(f"Building tree {i + 1}/{self.n_estimators}")
+                
+            # Sample data points
+            sample_indices = rng.choice(n_samples, size=max_samples, replace=False)
+            X_sample = X[sample_indices]
+            
+            # Create and fit tree
+            tree = ExtendedIsolationTree(max_depth=max_depth, random_state=rng.randint(0, 1000000))
+            tree.fit(X_sample)
+            self.trees.append(tree)
+            
+        # Calculate normalization constant
+        if max_samples > 1:
+            self.c = self._average_path_length(max_samples)
+        else:
+            self.c = 1.0
+            
+        # Calculate threshold
+        self.threshold = self._calculate_threshold(X)
+            
+        return self
+    
+    def _average_path_length(self, n):
+        """
+        Calculate the average path length in a binary search tree
+        given n points. This is used for normalization.
+        """
+        if n <= 1:
+            return 1.0
+        return 2.0 * (np.log(n - 1) + 0.5772156649) - (2.0 * (n - 1) / n)
+    
+    def decision_function(self, X):
+        """
+        Calculate anomaly score for each sample in X.
+        The anomaly score of a data point is defined as the average 
+        of the mean path length to the data point over all trees.
+        """
+        if len(self.trees) == 0:
+            raise ValueError("Model not fitted. Call fit() first.")
+            
+        n_samples = X.shape[0]
+        
+        # Calculate path length for each sample through each tree
+        scores = np.zeros(n_samples)
+        
+        for i in range(n_samples):
+            path_lengths = np.array([tree.path_length(X[i]) for tree in self.trees])
+            scores[i] = 2 ** (- np.mean(path_lengths) / self.c)
+            
+        return scores
+    
+    def _calculate_threshold(self, X):
+        """Calculate threshold based on contamination parameter"""
+        scores = self.decision_function(X)
+        # Higher scores indicate more anomalous
+        threshold = np.percentile(scores, 100 * (1 - self.contamination))
+        return threshold
+    
+    def predict(self, X):
+        """Predict if a point is an anomaly (1) or not (0)"""
+        scores = self.decision_function(X)
+        return np.where(scores > self.threshold, 1, 0)
+
+# Generate synthetic data with anomalies
+def generate_dataset(n_samples=1000, n_outliers=50, n_features=2, random_state=42):
+    # Generate normal data
+    X_normal, _ = make_blobs(n_samples=n_samples-n_outliers, centers=3, 
+                         n_features=n_features, random_state=random_state)
+    
+    # Generate outliers
+    X_outliers = np.random.uniform(low=-15, high=15, size=(n_outliers, n_features))
+    
+    # Combine normal and outlier data
+    X = np.vstack([X_normal, X_outliers])
+    
+    # Create labels (0 for normal, 1 for anomalies)
+    y = np.zeros(X.shape[0])
+    y[n_samples-n_outliers:] = 1
+    
+    # Shuffle data
+    idx = np.arange(X.shape[0])
+    np.random.seed(random_state)
+    np.random.shuffle(idx)
+    X = X[idx]
+    y = y[idx]
+    
+    return X, y
+
+# Generate data
+print("Generating synthetic data...")
+X, y = generate_dataset(n_samples=1000, n_outliers=50, n_features=2)
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# Standardize features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Train Extended Isolation Forest
+print("Training Extended Isolation Forest...")
+eif = ExtendedIsolationForest(n_estimators=100, contamination=0.05, random_state=42, verbose=True)
+eif.fit(X_train_scaled)
+
+# Make predictions
+print("Making predictions...")
+y_pred = eif.predict(X_test_scaled)
+anomaly_scores = eif.decision_function(X_test_scaled)
+
+# Calculate metrics
+accuracy = np.mean(y_test == y_pred)
+auc_score = roc_auc_score(y_test, anomaly_scores)
+precision, recall, _ = precision_recall_curve(y_test, anomaly_scores)
+pr_auc = auc(recall, precision)
+f1 = f1_score(y_test, y_pred)
+
+# Print results
+print(f"\nResults:")
+print(f"Accuracy: {accuracy:.4f}")
+print(f"ROC AUC: {auc_score:.4f}")
+print(f"PR AUC: {pr_auc:.4f}")
+print(f"F1 Score: {f1:.4f}")
+
+# Create a DataFrame for visualization
+results_df = pd.DataFrame({
+    'True Label': y_test,
+    'Predicted': y_pred,
+    'Anomaly Score': anomaly_scores,
+    'Feature1': X_test[:, 0],
+    'Feature2': X_test[:, 1]
+})
+
+# Plot results
+plt.figure(figsize=(16, 6))
+
+# Plot 1: Scatter plot of data points with true labels
+plt.subplot(1, 3, 1)
+plt.scatter(X_test[:, 0], X_test[:, 1], c=y_test, cmap='coolwarm', 
+            s=30, edgecolor='k', alpha=0.7)
+plt.title('True Labels')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
+plt.colorbar(label='Label (1=Anomaly)')
+
+# Plot 2: Scatter plot with predicted labels
+plt.subplot(1, 3, 2)
+plt.scatter(X_test[:, 0], X_test[:, 1], c=y_pred, cmap='coolwarm', 
+            s=30, edgecolor='k', alpha=0.7)
+plt.title('Predicted Labels')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
+plt.colorbar(label='Prediction (1=Anomaly)')
+
+# Plot 3: Scatter plot with anomaly scores
+plt.subplot(1, 3, 3)
+scatter = plt.scatter(X_test[:, 0], X_test[:, 1], c=anomaly_scores, cmap='viridis', 
+                     s=30, edgecolor='k', alpha=0.7)
+plt.title('Anomaly Scores')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
+plt.colorbar(scatter, label='Anomaly Score')
+
+plt.tight_layout()
+plt.show()
+
+# Comparing with standard Isolation Forest from sklearn
+print("\nComparing with standard Isolation Forest...")
+from sklearn.ensemble import IsolationForest
+
+# Train standard Isolation Forest
+clf = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
+clf.fit(X_train_scaled)
+
+# Make predictions (convert -1/1 to 0/1)
+y_pred_if = (clf.predict(X_test_scaled) == -1).astype(int)
+anomaly_scores_if = -clf.score_samples(X_test_scaled)  # Negative of decision function
+
+# Calculate metrics
+accuracy_if = np.mean(y_test == y_pred_if)
+auc_score_if = roc_auc_score(y_test, anomaly_scores_if)
+precision_if, recall_if, _ = precision_recall_curve(y_test, anomaly_scores_if)
+pr_auc_if = auc(recall_if, precision_if)
+f1_if = f1_score(y_test, y_pred_if)
+
+# Print comparison
+print("\nComparison Results:")
+print(f"{'Metric':<15} {'Extended IF':<15} {'Standard IF':<15}")
+print(f"{'-'*45}")
+print(f"{'Accuracy':<15} {accuracy:<15.4f} {accuracy_if:<15.4f}")
+print(f"{'ROC AUC':<15} {auc_score:<15.4f} {auc_score_if:<15.4f}")
+print(f"{'PR AUC':<15} {pr_auc:<15.4f} {pr_auc_if:<15.4f}")
+print(f"{'F1 Score':<15} {f1:<15.4f} {f1_if:<15.4f}")
+
+# Example: detecting anomalies in new data
+print("\nExample: Detecting anomalies in new data")
+new_points = np.array([
+    [0, 0],  # Likely normal point
+    [12, 12]  # Likely anomaly
+])
+
+# Scale the new points
+new_points_scaled = scaler.transform(new_points)
+
+# Get predictions
+new_predictions = eif.predict(new_points_scaled)
+new_scores = eif.decision_function(new_points_scaled)
+
+# Print results
+for i, (point, pred, score) in enumerate(zip(new_points, new_predictions, new_scores)):
+    status = "Anomaly" if pred == 1 else "Normal"
+    print(f"Point {i+1} {point}: {status} (Score: {score:.4f}, Threshold: {eif.threshold:.4f})")
