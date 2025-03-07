@@ -37,15 +37,17 @@ class CustomDataset(Dataset):
             return self.data[idx], self.labels[idx]
         return self.data[idx]
 
-# 3. Training Function
-def train_model(model, train_loader, val_loader, num_epochs=50, learning_rate=0.001, pos_weight=1.0):
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]))
+# 3. Training Function with GPU Support
+def train_model(model, train_loader, val_loader, device, num_epochs=50, learning_rate=0.001, pos_weight=1.0):
+    model.to(device)  # Move model to GPU/CPU
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(device))  # Move pos_weight to device
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0
         for data, labels in train_loader:
+            data, labels = data.to(device), labels.to(device)  # Move data to GPU/CPU
             outputs = model(data)
             loss = criterion(outputs, labels)
             optimizer.zero_grad()
@@ -59,6 +61,7 @@ def train_model(model, train_loader, val_loader, num_epochs=50, learning_rate=0.
         total = 0
         with torch.no_grad():
             for data, labels in val_loader:
+                data, labels = data.to(device), labels.to(device)  # Move data to GPU/CPU
                 outputs = model(data)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -74,26 +77,22 @@ def train_model(model, train_loader, val_loader, num_epochs=50, learning_rate=0.
             print(f'Epoch [{epoch+1}/{num_epochs}]')
             print(f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%')
 
-# 4. Load and Preprocess Data
+# 4. Load and Preprocess Data (Unchanged)
 def load_and_preprocess_data(file_path, target_column, categorical_columns):
     df = pd.read_excel(file_path)
     X = df.drop(columns=[target_column])
     y = df[target_column].values
     
-    # Store original column names
     original_columns = X.columns.tolist()
     
-    # Encode categorical features
     encoders = {}
     for col in categorical_columns:
         le = LabelEncoder()
         X[col] = le.fit_transform(X[col])
         encoders[col] = le
     
-    # One-hot encoding
     X = pd.get_dummies(X, columns=categorical_columns, drop_first=True)
     
-    # Scale features
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
     
@@ -104,12 +103,16 @@ def load_and_preprocess_data(file_path, target_column, categorical_columns):
     
     return X, y, pos_weight, scaler, encoders, original_columns
 
-# 5. Main Function with Saving
+# 5. Main Function with Saving and GPU Support
 def train_and_save_model():
+    # Check for GPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
     # Load data
     file_path = "your_data.xlsx"  # Replace with your file path
-    target_column = "label"       # Replace with your target column
-    categorical_columns = ["cat1", "cat2"]  # Replace with your categorical columns
+    target_column = "label"
+    categorical_columns = ["cat1", "cat2"]
     
     X, y, pos_weight, scaler, encoders, original_columns = load_and_preprocess_data(
         file_path, target_column, categorical_columns
@@ -135,7 +138,7 @@ def train_and_save_model():
     # Initialize and train model
     input_dim = X_train.shape[1]
     model = BinaryClassifier(input_dim)
-    train_model(model, train_loader, val_loader, pos_weight=pos_weight)
+    train_model(model, train_loader, val_loader, device, pos_weight=pos_weight)
     
     # Evaluate on test set
     model.eval()
@@ -143,6 +146,7 @@ def train_and_save_model():
     total = 0
     with torch.no_grad():
         for data, labels in test_loader:
+            data, labels = data.to(device), labels.to(device)  # Move to GPU/CPU
             outputs = model(data)
             predicted = (torch.sigmoid(outputs) >= 0.5).float()
             total += labels.size(0)
@@ -158,43 +162,43 @@ def train_and_save_model():
     
     print("Model and preprocessing objects saved.")
 
-# 6. Prediction Function for New Data
+# 6. Prediction Function with GPU Support
 def load_and_predict(new_file_path, model_path="original_model.pth"):
+    # Check for GPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device for prediction: {device}")
+    
     # Load saved objects
     scaler = joblib.load("scaler.pkl")
     encoders = joblib.load("encoders.pkl")
     original_columns = joblib.load("original_columns.pkl")
     
     # Load model
-    input_dim = len(scaler.mean_)  # Infer input dimension from scaler
+    input_dim = len(scaler.mean_)
     model = BinaryClassifier(input_dim)
     model.load_state_dict(torch.load(model_path))
+    model.to(device)  # Move model to GPU/CPU
     model.eval()
     
     # Load and preprocess new data
     new_df = pd.read_excel(new_file_path)
     
-    # Ensure columns match
     missing_cols = set(original_columns) - set(new_df.columns)
     if missing_cols:
         raise ValueError(f"New data is missing columns: {missing_cols}")
     
     X_new = new_df[original_columns]
     
-    # Encode categorical features
     for col, le in encoders.items():
         if col in X_new.columns:
             X_new[col] = le.transform(X_new[col])
     
-    # One-hot encoding
     categorical_columns = [col for col in encoders.keys()]
     X_new = pd.get_dummies(X_new, columns=categorical_columns, drop_first=True)
     
-    # Align columns with training data
     training_columns = scaler.feature_names_in_ if hasattr(scaler, 'feature_names_in_') else X_new.columns
     X_new = X_new.reindex(columns=training_columns, fill_value=0)
     
-    # Scale features
     X_new = scaler.transform(X_new)
     
     # Predict
@@ -204,9 +208,10 @@ def load_and_predict(new_file_path, model_path="original_model.pth"):
     predictions = []
     with torch.no_grad():
         for data in new_loader:
+            data = data.to(device)  # Move data to GPU/CPU
             outputs = model(data)
             predicted = (torch.sigmoid(outputs) >= 0.5).float()
-            predictions.extend(predicted.numpy().flatten())
+            predictions.extend(predicted.cpu().numpy().flatten())  # Move back to CPU for NumPy
     
     return np.array(predictions)
 
@@ -218,4 +223,4 @@ if __name__ == "__main__":
     # Predict on new data
     new_file_path = "new_data.xlsx"  # Replace with your new data file
     predictions = load_and_predict(new_file_path)
-    print("Predictions:", predictions)  # 0 = normal, 1 = anomaly
+    print("Predictions:", predictions)
